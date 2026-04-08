@@ -1,9 +1,10 @@
 import { app, BrowserView, BrowserWindow, ipcMain, dialog, session, shell } from 'electron';
+import os from 'os';
 import path from 'path';
 import { hasKeys, saveKeys, loadKeys } from './KeysService';
 import { sqliteManager } from './SQLiteManager';
 import { query, queryAll, judge } from './AIRouter';
-import { ptyManager } from './PTYManager';
+import { ptyManager, type ShellType } from './PTYManager';
 
 let win: BrowserWindow;
 const views = new Map<string, BrowserView>();
@@ -11,13 +12,14 @@ const networkLogs = new Map<string, any[]>();
 let activeTabId = '';
 let activePanel = 'browser';
 let defaultTabCreated = false;
+let searchView: BrowserView | null = null;
 
 function getBrowserBounds() {
   const { width, height } = win.getBounds();
   return {
     x: 72,
     y: 76,
-    width: Math.floor(width - 72),
+    width: Math.floor(width - 72 - 300),
     height: Math.floor(height - 116),
   };
 }
@@ -78,6 +80,20 @@ function createTab(url: string): string {
 
   showTab(id);
   return id;
+}
+
+function getOrCreateSearchView(): BrowserView {
+  if (!searchView) {
+    searchView = new BrowserView({
+      webPreferences: {
+        contextIsolation: true,
+        nodeIntegration: false,
+      }
+    });
+    win.addBrowserView(searchView);
+    searchView.setBounds({ x: 0, y: 0, width: 0, height: 0 });
+  }
+  return searchView;
 }
 
 function createWindow() {
@@ -201,6 +217,96 @@ function registerIPC() {
     return id;
   });
 
+  ipcMain.handle('browser:fetch', async (_, url: string) => {
+    const view = getOrCreateSearchView();
+
+    return new Promise<{ url: string; title: string; text: string; html: string }>((resolve) => {
+      const cleanupAndResolve = (payload: { url: string; title: string; text: string; html: string }) => {
+        clearTimeout(timeout);
+        resolve(payload);
+      };
+
+      const timeout = setTimeout(() => {
+        cleanupAndResolve({ url, title: '', text: 'Page load timed out', html: '' });
+      }, 15000);
+
+      view.webContents.once('did-finish-load', async () => {
+        try {
+          const result = await view.webContents.executeJavaScript(`
+            (function() {
+              const remove = document.querySelectorAll('script, style, nav, footer, header, .nav, .footer, .header, .sidebar, .ad, .advertisement');
+              remove.forEach(el => el.remove());
+              const main = document.querySelector('main, article, .content, .main, #content, #main') || document.body;
+              const text = main.innerText || main.textContent || '';
+              return {
+                title: document.title,
+                text: text.replace(/\\s+/g, ' ').trim().slice(0, 5000),
+                url: window.location.href,
+              };
+            })()
+          `) as { title: string; text: string; url: string };
+
+          cleanupAndResolve({
+            url: result.url,
+            title: result.title,
+            text: result.text,
+            html: '',
+          });
+        } catch {
+          cleanupAndResolve({ url, title: '', text: 'Failed to extract page content', html: '' });
+        }
+      });
+
+      void view.webContents.loadURL(url).catch(() => {
+        cleanupAndResolve({ url, title: '', text: 'Failed to load page content', html: '' });
+      });
+    });
+  });
+
+  ipcMain.handle('browser:search', async (_, query: string) => {
+    const searchUrl = `https://html.duckduckgo.com/html/?q=${encodeURIComponent(query)}`;
+    const view = getOrCreateSearchView();
+
+    return new Promise<Array<{ title: string; url: string; snippet: string }>>((resolve) => {
+      const cleanupAndResolve = (payload: Array<{ title: string; url: string; snippet: string }>) => {
+        clearTimeout(timeout);
+        resolve(payload);
+      };
+
+      const timeout = setTimeout(() => cleanupAndResolve([]), 10000);
+
+      view.webContents.once('did-finish-load', async () => {
+        try {
+          const results = await view.webContents.executeJavaScript(`
+            (function() {
+              const results = [];
+              const items = document.querySelectorAll('.result');
+              items.forEach((item, i) => {
+                if (i >= 5) return;
+                const titleEl = item.querySelector('.result__title a');
+                const snippetEl = item.querySelector('.result__snippet');
+                const urlEl = item.querySelector('.result__url');
+                if (titleEl) {
+                  results.push({
+                    title: titleEl.innerText || titleEl.textContent || '',
+                    url: titleEl.href || (urlEl ? (urlEl.innerText || urlEl.textContent || '') : ''),
+                    snippet: snippetEl ? (snippetEl.innerText || snippetEl.textContent || '') : '',
+                  });
+                }
+              });
+              return results;
+            })()
+          `) as Array<{ title: string; url: string; snippet: string }>;
+          cleanupAndResolve(results);
+        } catch {
+          cleanupAndResolve([]);
+        }
+      });
+
+      void view.webContents.loadURL(searchUrl).catch(() => cleanupAndResolve([]));
+    });
+  });
+
   ipcMain.handle('ai:screenshot', async (_, tabId?: string) => {
     const view = views.get(tabId ?? activeTabId);
     if (!view) return null;
@@ -243,9 +349,27 @@ function registerIPC() {
     return result.canceled ? null : result.filePaths[0];
   });
 
+  ipcMain.handle('fs:openFile', async () => {
+    const result = await dialog.showOpenDialog(win, {
+      properties: ['openFile'],
+      filters: [
+        { name: 'All Files', extensions: ['*'] },
+        { name: 'Text', extensions: ['txt', 'md', 'ts', 'tsx', 'js', 'jsx', 'py', 'json', 'yaml', 'yml', 'css', 'html', 'sh', 'rs', 'go'] },
+        { name: 'Images', extensions: ['png', 'jpg', 'jpeg', 'gif', 'webp'] },
+        { name: 'PDF', extensions: ['pdf'] },
+      ],
+    });
+    return result.canceled ? null : result.filePaths[0];
+  });
+
   ipcMain.handle('fs:read', (_, p: string) => {
     const fs = require('fs');
     return fs.readFileSync(p, 'utf8');
+  });
+
+  ipcMain.handle('fs:readBase64', (_, p: string) => {
+    const fs = require('fs');
+    return fs.readFileSync(p).toString('base64');
   });
 
   ipcMain.handle('fs:write', (_, { p, content }: { p: string; content: string }) => {
@@ -258,8 +382,9 @@ function registerIPC() {
     return fs.readdirSync(dir);
   });
 
-  ipcMain.handle('pty:spawn', (_, id: string) => {
-    const p = ptyManager.spawn(id);
+  ipcMain.handle('pty:spawn', (_, { id, shellType }: { id: string; shellType?: string }) => {
+    const shell = (shellType as ShellType) ?? 'powershell';
+    const p = ptyManager.spawn(id, shell);
     p.onData(data => win.webContents.send('pty:data', { id, output: data }));
   });
 
@@ -267,6 +392,12 @@ function registerIPC() {
   ipcMain.handle('pty:resize', (_, { id, cols, rows }: { id: string; cols: number; rows: number }) => ptyManager.resize(id, cols, rows));
   ipcMain.handle('pty:kill', (_, id: string) => ptyManager.kill(id));
   ipcMain.handle('pty:exec', async (_, { cmd, cwd }: { cmd: string; cwd: string }) => ptyManager.exec(cmd, cwd));
+  ipcMain.handle('pty:execWSL', async (_, command: string) => {
+    return ptyManager.execInWSL(command);
+  });
+  ipcMain.handle('pty:execPS', async (_, command: string) => {
+    return ptyManager.execInPowerShell(command);
+  });
   ipcMain.handle('pty:output', (_, id: string) => ptyManager.getOutput(id));
 
   // SQLite handlers
@@ -289,12 +420,6 @@ function registerIPC() {
   ipcMain.handle('db:createEvent', (_, event) => sqliteManager.createEvent(event));
   ipcMain.handle('db:updateEvent', (_, { id, patch }) => sqliteManager.updateEvent(id, patch));
   ipcMain.handle('db:deleteEvent', (_, id) => sqliteManager.deleteEvent(id));
-  ipcMain.handle('db:getNotebooks', () => sqliteManager.getNotebooks());
-  ipcMain.handle('db:createNotebook', (_, name) => sqliteManager.createNotebook(name));
-  ipcMain.handle('db:getCells', (_, notebookId) => sqliteManager.getCells(notebookId));
-  ipcMain.handle('db:createCell', (_, cell) => sqliteManager.createCell(cell));
-  ipcMain.handle('db:updateCell', (_, { id, patch }) => sqliteManager.updateCell(id, patch));
-  ipcMain.handle('db:deleteCell', (_, id) => sqliteManager.deleteCell(id));
 }
 
 app.whenReady().then(() => {

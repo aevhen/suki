@@ -10,6 +10,8 @@ contextBridge.exposeInMainWorld('suki', {
   reload: (id: string) => ipcRenderer.invoke('tab:reload', id),
   switchPanel: (panel: string) => ipcRenderer.invoke('panel:switch', panel),
   openInBrowser: (url: string) => ipcRenderer.invoke('browser:openURL', url),
+  browserFetch: (url: string) => ipcRenderer.invoke('browser:fetch', url),
+  browserSearch: (query: string) => ipcRenderer.invoke('browser:search', query),
 
   screenshot: (tabId?: string) => ipcRenderer.invoke('ai:screenshot', tabId),
   getDOM: (tabId?: string) => ipcRenderer.invoke('ai:dom', tabId),
@@ -22,15 +24,19 @@ contextBridge.exposeInMainWorld('suki', {
   hasKeys: () => ipcRenderer.invoke('keys:has'),
 
   openFolder: () => ipcRenderer.invoke('fs:openFolder'),
+  openFile: () => ipcRenderer.invoke('fs:openFile'),
   readFile: (p: string) => ipcRenderer.invoke('fs:read', p),
+  readFileBase64: (p: string) => ipcRenderer.invoke('fs:readBase64', p),
   writeFile: (p: string, content: string) => ipcRenderer.invoke('fs:write', { p, content }),
   listFiles: (dir: string) => ipcRenderer.invoke('fs:list', dir),
 
-  spawnTerminal: (id: string) => ipcRenderer.invoke('pty:spawn', id),
+  spawnTerminal: (id: string, shellType?: string) => ipcRenderer.invoke('pty:spawn', { id, shellType }),
   writeTerminal: (id: string, data: string) => ipcRenderer.invoke('pty:write', { id, data }),
   resizeTerminal: (id: string, cols: number, rows: number) => ipcRenderer.invoke('pty:resize', { id, cols, rows }),
   killTerminal: (id: string) => ipcRenderer.invoke('pty:kill', id),
   execCommand: (cmd: string, cwd: string) => ipcRenderer.invoke('pty:exec', { cmd, cwd }),
+  execInWSL: (command: string) => ipcRenderer.invoke('pty:execWSL', command),
+  execInPowerShell: (command: string) => ipcRenderer.invoke('pty:execPS', command),
   getTerminalOutput: (id: string) => ipcRenderer.invoke('pty:output', id),
 
   getNotes: () => ipcRenderer.invoke('db:getNotes'),
@@ -54,13 +60,6 @@ contextBridge.exposeInMainWorld('suki', {
   createEvent: (event: unknown) => ipcRenderer.invoke('db:createEvent', event),
   updateEvent: (id: string, patch: unknown) => ipcRenderer.invoke('db:updateEvent', { id, patch }),
   deleteEvent: (id: string) => ipcRenderer.invoke('db:deleteEvent', id),
-
-  getNotebooks: () => ipcRenderer.invoke('db:getNotebooks'),
-  createNotebook: (name: string) => ipcRenderer.invoke('db:createNotebook', name),
-  getCells: (notebookId: string) => ipcRenderer.invoke('db:getCells', notebookId),
-  createCell: (cell: unknown) => ipcRenderer.invoke('db:createCell', cell),
-  updateCell: (id: string, patch: unknown) => ipcRenderer.invoke('db:updateCell', { id, patch }),
-  deleteCell: (id: string) => ipcRenderer.invoke('db:deleteCell', id),
 
   onTabUpdated: (cb: (data: unknown) => void) => {
     ipcRenderer.on('tab:updated', (_, d) => cb(d));

@@ -1,6 +1,7 @@
 import React, { useCallback, useMemo, useRef, useState } from 'react';
 import FileTree from './FileTree';
 import MonacoEditor, { getLanguage } from './MonacoEditor';
+import { stripAnsi } from '../../utils/stripAnsi';
 
 interface OpenFile {
   path: string;
@@ -379,7 +380,7 @@ Rules:
               lastError = '';
             } else {
               const result = await (window as any).suki.execCommand(runCmd, projectRoot ?? '.');
-              execOutput = result.output;
+              execOutput = stripAnsi(result.output);
               execSuccess = result.success;
               lastOutput = execOutput;
               lastError = execSuccess ? '' : execOutput;
@@ -390,7 +391,7 @@ Rules:
             lastError = '';
           }
         } catch (err: any) {
-          execOutput = err?.message ?? 'Execution failed';
+          execOutput = stripAnsi(err?.message ?? 'Execution failed');
           lastError = execOutput;
         }
       } else {

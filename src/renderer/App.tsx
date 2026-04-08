@@ -1,28 +1,28 @@
 import React, { useState, useEffect } from 'react';
 import IDEPane from './panels/IDEPane/index';
-import NotebookPane from './panels/NotebookPane/index';
 import NotesPane from './panels/NotesPane/index';
 import TasksPane from './panels/TasksPane/index';
 import CalendarPane from './panels/CalendarPane/index';
 import TerminalPane from './panels/TerminalPane/index';
+import CTFPane from './panels/CTFPane/index';
 import TabCarousel from './panels/BrowserPane/TabCarousel';
 import NavBar from './panels/BrowserPane/NavBar';
 import AISidebar from './panels/AISidebar/index';
 import APIModal from './panels/APIModal';
 
-export type PanelType = 'browser' | 'ide' | 'notebook' | 'notes' | 'tasks' | 'calendar' | 'terminal';
+export type PanelType = 'browser' | 'ide' | 'notes' | 'tasks' | 'calendar' | 'terminal' | 'ctf';
 
 const PANEL_LABELS: Record<PanelType, string> = {
   browser: 'Browser',
   ide: 'IDE',
-  notebook: 'Notebook',
   notes: 'Notes',
   tasks: 'Tasks',
   calendar: 'Calendar',
   terminal: 'Terminal',
+  ctf: 'CTF',
 };
 
-const PANELS: PanelType[] = ['browser', 'ide', 'notebook', 'notes', 'tasks', 'calendar', 'terminal'];
+const PANELS: PanelType[] = ['browser', 'ide', 'notes', 'tasks', 'calendar', 'terminal', 'ctf'];
 
 export default function App() {
   const [activePanel, setActivePanel] = useState<PanelType>('browser');
@@ -88,7 +88,6 @@ export default function App() {
         display: 'flex',
         flex: 1,
         overflow: 'hidden',
-        position: 'relative',
       }}>
         <TabCarousel onSwitchToBrowser={() => handlePanelSwitch('browser')} />
 
@@ -100,10 +99,10 @@ export default function App() {
           background: '#0a0812',
         }}>
           {activePanel === 'ide' && <IDEPane />}
-          {activePanel === 'notebook' && <NotebookPane />}
           {activePanel === 'notes' && <NotesPane />}
           {activePanel === 'tasks' && <TasksPane />}
           {activePanel === 'calendar' && <CalendarPane />}
+          {activePanel === 'ctf' && <CTFPane />}
           <div
             style={{
               display: activePanel === 'terminal' ? 'block' : 'none',
@@ -115,8 +114,8 @@ export default function App() {
           </div>
         </div>
 
-        {/* AI Sidebar overlays on right */}
-        <AISidebar />
+        {/* AI Sidebar */}
+        <AISidebar activePanel={activePanel} />
       </div>
 
       {/* Bottom panel switcher */}
