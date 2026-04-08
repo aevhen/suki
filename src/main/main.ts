@@ -19,6 +19,15 @@ function getBrowserBounds() {
   return { x: 72, y: 76, width: bounds.width - 72, height: bounds.height - 76 };
 }
 
+function setViewBounds(view: BrowserTabView, bounds: Electron.Rectangle): void {
+  view.setBounds({
+    x: Math.floor(bounds.x),
+    y: Math.floor(bounds.y),
+    width: Math.floor(bounds.width),
+    height: Math.floor(bounds.height),
+  });
+}
+
 function attachCDP(wc: Electron.WebContents, tabId: string) {
   try {
     wc.debugger.attach('1.3');
@@ -48,29 +57,36 @@ function setActiveTab(id: string): void {
   const active = tabs.get(id);
   if (!active) return;
   for (const view of tabs.values()) {
-    view.setBounds({ x: 0, y: 0, width: 0, height: 0 });
+    setViewBounds(view, { x: 0, y: 0, width: 0, height: 0 });
   }
   activeTabId = id;
-  active.setBounds(getBrowserBounds());
+  setViewBounds(active, getBrowserBounds());
   win.webContents.send('tab:activated', id);
 }
 
 function createTab(url: string): string {
-  const id = crypto.randomUUID();
-  const view = new ViewClass({
-    webPreferences: {
-      contextIsolation: true,
-      nodeIntegration: false,
-    },
-  });
-  tabs.set(id, view);
-  networkLogs.set(id, []);
-  addView(view);
-  attachCDP(view.webContents, id);
-  view.setBounds({ x: 0, y: 0, width: 0, height: 0 });
-  view.webContents.loadURL(url);
-  setActiveTab(id);
-  return id;
+  try {
+    const id = crypto.randomUUID();
+    const view = new ViewClass({
+      webPreferences: {
+        contextIsolation: true,
+        nodeIntegration: false,
+      },
+    });
+    tabs.set(id, view);
+    networkLogs.set(id, []);
+    addView(view);
+    attachCDP(view.webContents, id);
+    setViewBounds(view, { x: 0, y: 0, width: 0, height: 0 });
+    view.webContents.loadURL(url).catch(error => {
+      console.error('Failed to load tab URL:', error);
+    });
+    setActiveTab(id);
+    return id;
+  } catch (error) {
+    console.error('Failed to create tab:', error);
+    return '';
+  }
 }
 
 function closeTab(id: string): boolean {
@@ -89,11 +105,16 @@ function closeTab(id: string): boolean {
 }
 
 function addView(view: BrowserTabView): void {
+  if (!win || !win.contentView) {
+    if (view instanceof BrowserView) {
+      win?.addBrowserView(view);
+    }
+    return;
+  }
   if ('contentView' in win && win.contentView) {
     win.contentView.addChildView(view as WebContentsView);
     return;
   }
-  win.addBrowserView(view as BrowserView);
 }
 
 function removeView(view: BrowserTabView): void {
@@ -129,14 +150,12 @@ function createWindow(): void {
 
   win.on('resize', () => {
     const view = tabs.get(activeTabId);
-    if (view) view.setBounds(getBrowserBounds());
+    if (view) setViewBounds(view, getBrowserBounds());
   });
 
   win.webContents.once('did-finish-load', () => {
-    win.webContents.send(hasKeys() ? 'show-main' : 'show-setup');
+    win.webContents.send('show-main');
   });
-
-  createTab('https://google.com');
 }
 
 ipcMain.handle('tab:create', (_, url) => createTab(url));
@@ -222,6 +241,7 @@ ipcMain.handle('build:status', (_, runId) => ({ runId, status: 'unknown' }));
 
 app.whenReady().then(() => {
   createWindow();
+  setTimeout(() => createTab('https://google.com'), 500);
 
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow();

@@ -23,18 +23,18 @@ export default function SetupScreen({ onComplete }: Props) {
   };
 
   return (
-    <div style={{ height: '100vh', background: '#0d0d0f', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 32 }}>
-      <div style={{ width: '100%', maxWidth: 480 }}>
-        <h1 style={{ color: '#00ffe7', fontSize: 28, fontWeight: 600, marginBottom: 8 }}>Welcome to Suki</h1>
-        <p style={{ color: '#8a8a96', marginBottom: 32, fontSize: 14 }}>
+    <div style={{ height: '100vh', background: '#0a0812', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 32 }}>
+      <div style={{ width: '100%', maxWidth: 480, background: '#110f1e', border: '1px solid #2d2850', borderRadius: 8, padding: 24 }}>
+        <h1 style={{ color: '#7c6ee0', fontSize: 28, fontWeight: 600, marginBottom: 8 }}>Welcome to Suki</h1>
+        <p style={{ color: '#9890c0', marginBottom: 32, fontSize: 14 }}>
           Enter your API keys to enable cloud AI fallbacks. All keys are encrypted locally. All fields are optional. Ollama runs locally with no key needed.
         </p>
 
         {PROVIDERS.map(p => (
           <div key={p.key} style={{ marginBottom: 16 }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 4 }}>
-              <label style={{ color: '#e8e8ec', fontSize: 13 }}>{p.label}</label>
-              <a href={p.url} target="_blank" rel="noreferrer" style={{ color: '#00ffe7', fontSize: 12 }}>{p.hint} -&gt;</a>
+              <label style={{ color: '#e8e4ff', fontSize: 13 }}>{p.label}</label>
+              <a href={p.url} target="_blank" rel="noreferrer" style={{ color: '#a394f0', fontSize: 12 }}>{p.hint} -&gt;</a>
             </div>
             <input
               type="password"
@@ -42,8 +42,8 @@ export default function SetupScreen({ onComplete }: Props) {
               value={keys[p.key] ?? ''}
               onChange={e => setKeys(prev => ({ ...prev, [p.key]: e.target.value }))}
               style={{
-                width: '100%', padding: '8px 12px', background: '#141418',
-                border: '1px solid #2a2a33', borderRadius: 6, color: '#e8e8ec',
+                width: '100%', padding: '8px 12px', background: '#1a1730',
+                border: '1px solid #2d2850', borderRadius: 6, color: '#e8e4ff',
                 fontSize: 13, outline: 'none',
               }}
             />
@@ -54,13 +54,13 @@ export default function SetupScreen({ onComplete }: Props) {
           <button
             onClick={save}
             disabled={saving}
-            style={{ flex: 1, padding: '10px 0', background: '#00ffe7', color: '#0d0d0f', border: 'none', borderRadius: 6, fontWeight: 600, cursor: 'pointer', fontSize: 14 }}
+            style={{ flex: 1, padding: '10px 0', background: '#7c6ee0', color: '#ffffff', border: 'none', borderRadius: 6, fontWeight: 600, cursor: 'pointer', fontSize: 14 }}
           >
             {saving ? 'Saving...' : 'Save & Launch'}
           </button>
           <button
             onClick={onComplete}
-            style={{ padding: '10px 20px', background: 'transparent', color: '#8a8a96', border: '1px solid #2a2a33', borderRadius: 6, cursor: 'pointer', fontSize: 14 }}
+            style={{ padding: '10px 20px', background: 'transparent', color: '#9890c0', border: '1px solid #2d2850', borderRadius: 6, cursor: 'pointer', fontSize: 14 }}
           >
             Skip
           </button>
