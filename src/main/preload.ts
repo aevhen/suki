@@ -8,6 +8,8 @@ contextBridge.exposeInMainWorld('suki', {
   goBack: (id: string) => ipcRenderer.invoke('tab:back', id),
   goForward: (id: string) => ipcRenderer.invoke('tab:forward', id),
   reload: (id: string) => ipcRenderer.invoke('tab:reload', id),
+  switchPanel: (panel: string) => ipcRenderer.invoke('panel:switch', panel),
+  openInBrowser: (url: string) => ipcRenderer.invoke('browser:openURL', url),
 
   screenshot: (tabId?: string) => ipcRenderer.invoke('ai:screenshot', tabId),
   getDOM: (tabId?: string) => ipcRenderer.invoke('ai:dom', tabId),
@@ -60,12 +62,6 @@ contextBridge.exposeInMainWorld('suki', {
   updateCell: (id: string, patch: unknown) => ipcRenderer.invoke('db:updateCell', { id, patch }),
   deleteCell: (id: string) => ipcRenderer.invoke('db:deleteCell', id),
 
-  parsePRD: (markdown: string) => ipcRenderer.invoke('build:parse', markdown),
-  startBuild: (plan: unknown, outputDir: string) => ipcRenderer.invoke('build:start', { plan, outputDir }),
-  pauseBuild: (runId: string) => ipcRenderer.invoke('build:pause', runId),
-  resumeBuild: (runId: string) => ipcRenderer.invoke('build:resume', runId),
-  getBuildStatus: (runId: string) => ipcRenderer.invoke('build:status', runId),
-
   onTabUpdated: (cb: (data: unknown) => void) => {
     ipcRenderer.on('tab:updated', (_, d) => cb(d));
     return () => ipcRenderer.removeAllListeners('tab:updated');
@@ -82,13 +78,9 @@ contextBridge.exposeInMainWorld('suki', {
     ipcRenderer.on('pty:data', (_, d) => cb(d));
     return () => ipcRenderer.removeAllListeners('pty:data');
   },
-  onBuildProgress: (cb: (data: unknown) => void) => {
-    ipcRenderer.on('build:progress', (_, d) => cb(d));
-    return () => ipcRenderer.removeAllListeners('build:progress');
-  },
-  onMLMetric: (cb: (data: unknown) => void) => {
-    ipcRenderer.on('ml:metric', (_, d) => cb(d));
-    return () => ipcRenderer.removeAllListeners('ml:metric');
+  onForcePanelSwitch: (cb: (panel: string) => void) => {
+    ipcRenderer.on('force-panel-switch', (_, panel) => cb(panel));
+    return () => ipcRenderer.removeAllListeners('force-panel-switch');
   },
   onSetupState: (cb: (screen: 'setup' | 'main') => void) => {
     ipcRenderer.on('show-setup', () => cb('setup'));

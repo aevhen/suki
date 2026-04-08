@@ -11,15 +11,13 @@ type ContextToggles = {
   dom: boolean;
   network: boolean;
   terminal: boolean;
-  notes: boolean;
 };
 
-const CONTEXT_SOURCES: Array<{ key: keyof ContextToggles; label: string; title: string; tokens: number }> = [
-  { key: 'screenshot', label: '\uD83D\uDCF7', title: 'Screenshot', tokens: 8 },
-  { key: 'dom', label: '</>', title: 'DOM', tokens: 12 },
-  { key: 'network', label: '\u301c', title: 'Network', tokens: 4 },
-  { key: 'terminal', label: '>', title: 'Terminal', tokens: 2 },
-  { key: 'notes', label: '\u2726', title: 'Notes', tokens: 3 },
+const CONTEXT_SOURCES: Array<{ key: keyof ContextToggles; label: string; tokens: number }> = [
+  { key: 'screenshot', label: 'Browser screenshot', tokens: 8 },
+  { key: 'dom', label: 'Page HTML', tokens: 12 },
+  { key: 'network', label: 'Network log', tokens: 4 },
+  { key: 'terminal', label: 'Terminal output', tokens: 2 },
 ];
 
 export default function AISidebar() {
@@ -33,8 +31,8 @@ export default function AISidebar() {
     dom: false,
     network: false,
     terminal: false,
-    notes: false,
   });
+  const [contextExpanded, setContextExpanded] = useState(false);
   const [uploadedFiles, setUploadedFiles] = useState<File[]>([]);
   const [draggingFile, setDraggingFile] = useState(false);
   const [hoveredMessage, setHoveredMessage] = useState<number | null>(null);
@@ -99,10 +97,6 @@ export default function AISidebar() {
         const term = await (window as any).suki.getTerminalOutput?.('terminal-1');
         if (term) contextParts.push(`Terminal output:\n${term.slice(-2000)}`);
       }
-      if (contextToggles.notes && uploadedFiles.length > 0) {
-        contextParts.push(`Attached files:\n${uploadedFiles.map(file => file.name).join('\n')}`);
-      }
-
       const systemPrompt = contextParts.length > 0
         ? `You are Suki, an AI assistant with access to the user's workspace context.\n\n${contextParts.join('\n\n')}`
         : 'You are Suki, an AI assistant.';
@@ -177,23 +171,7 @@ export default function AISidebar() {
           flexShrink: 0,
         }}>
           <div style={{ color: '#7c6ee0', fontSize: 13, fontWeight: 500 }}>Suki AI</div>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-            {CONTEXT_SOURCES.map(source => (
-              <button
-                key={source.key}
-                title={source.title}
-                onClick={() => setContextToggles(prev => ({ ...prev, [source.key]: !prev[source.key] }))}
-                style={{
-                  width: 18,
-                  height: 18,
-                  color: contextToggles[source.key] ? '#7c6ee0' : '#5a5480',
-                  fontSize: 12,
-                  transition: 'color 0.15s ease, transform 0.1s ease',
-                }}
-              >
-                {source.label}
-              </button>
-            ))}
+          <div style={{ display: 'flex', alignItems: 'center' }}>
             <button
               onClick={() => setThinkingMode(v => !v)}
               style={{
@@ -217,12 +195,60 @@ export default function AISidebar() {
           </div>
         </div>
 
-        <div style={{ flex: 1, overflowY: 'auto', padding: 14, display: 'flex', flexDirection: 'column', gap: 12 }}>
-          {messages.length === 0 && (
-            <div className="animate-fade-in" style={{ color: '#5a5480', fontSize: 13, lineHeight: 1.5 }}>
-              Ask about the current browser tab, workspace context, or terminal output.
+        <section style={{ background: '#0a0812', borderBottom: '1px solid #2d2850', flexShrink: 0 }}>
+          <button
+            onClick={() => setContextExpanded(open => !open)}
+            style={{
+              width: '100%',
+              padding: '6px 12px',
+              textAlign: 'left',
+              color: '#5a5480',
+              fontSize: 11,
+              transition: 'color 0.15s ease',
+            }}
+            onMouseEnter={event => { event.currentTarget.style.color = '#7c6ee0'; }}
+            onMouseLeave={event => { event.currentTarget.style.color = '#5a5480'; }}
+          >
+            Context {contextExpanded ? '\u25be' : '\u25b8'}
+          </button>
+          <div
+            style={{
+              maxHeight: contextExpanded ? 120 : 0,
+              overflow: 'hidden',
+              transition: 'max-height 0.2s ease',
+            }}
+          >
+            <div style={{ padding: '0 12px 10px', display: 'flex', flexDirection: 'column', gap: 8 }}>
+              {CONTEXT_SOURCES.map(source => (
+                <label
+                  key={source.key}
+                  style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: 8,
+                    color: '#9890c0',
+                    fontSize: 12,
+                    cursor: 'pointer',
+                  }}
+                >
+                  <input
+                    type="checkbox"
+                    checked={contextToggles[source.key]}
+                    onChange={() => setContextToggles(prev => ({ ...prev, [source.key]: !prev[source.key] }))}
+                    style={{
+                      width: 12,
+                      height: 12,
+                      accentColor: '#7c6ee0',
+                    }}
+                  />
+                  {source.label}
+                </label>
+              ))}
             </div>
-          )}
+          </div>
+        </section>
+
+        <div style={{ flex: 1, overflowY: 'auto', padding: 14, display: 'flex', flexDirection: 'column', gap: 12 }}>
           {messages.map((message, index) => (
             <div
               key={`${message.timestamp}-${index}`}

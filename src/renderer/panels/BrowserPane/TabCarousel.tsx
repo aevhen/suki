@@ -3,7 +3,11 @@ import { useTabs } from '../../hooks/useTabs';
 
 const TAB_HEIGHT = 80;
 
-export default function TabCarousel() {
+interface TabCarouselProps {
+  onSwitchToBrowser: () => void;
+}
+
+export default function TabCarousel({ onSwitchToBrowser }: TabCarouselProps) {
   const { tabs, activeTabId, createTab, closeTab, activateTab, reorderTabs } = useTabs();
   const [scrollY, setScrollY] = useState(0);
   const [collapsed, setCollapsed] = useState(false);
@@ -42,6 +46,16 @@ export default function TabCarousel() {
         return next;
       });
     }, 150);
+  };
+
+  const handleTabClick = async (tabId: string) => {
+    await activateTab(tabId);
+    onSwitchToBrowser();
+  };
+
+  const handleNewTab = async () => {
+    await createTab('https://google.com');
+    onSwitchToBrowser();
   };
 
   return (
@@ -101,7 +115,7 @@ export default function TabCarousel() {
               <div
                 key={tab.id}
                 className={isClosing ? 'animate-fade-out' : 'animate-fade-in-left'}
-                onClick={() => activateTab(tab.id)}
+                onClick={() => handleTabClick(tab.id)}
                 onMouseEnter={() => setHoveredId(tab.id)}
                 onMouseLeave={() => setHoveredId(null)}
                 onMouseDown={e => {
@@ -207,7 +221,7 @@ export default function TabCarousel() {
       </div>
 
       <div
-        onClick={() => createTab('https://google.com')}
+        onClick={handleNewTab}
         style={{
           height: 36,
           width: collapsed ? 48 : 72,
