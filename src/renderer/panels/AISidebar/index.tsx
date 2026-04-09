@@ -33,6 +33,13 @@ interface ToolCall {
   output?: string;
 }
 
+interface ProviderStatus {
+  provider: string;
+  status: 'working' | 'done' | 'failed';
+  latencyMs?: number;
+  startedAt: number;
+}
+
 interface AISidebarProps {
   activePanel: string;
 }
@@ -70,6 +77,14 @@ const CONTEXT_SOURCES: Array<{ key: ContextToggleKey; label: string; tokens: num
 
 const IMAGE_EXTS = ['png', 'jpg', 'jpeg', 'gif', 'webp'];
 const PDF_EXTS = ['pdf'];
+const PROVIDER_INFO: Record<string, { label: string; color: string }> = {
+  primary: { label: 'Gemma 4 E4B', color: '#7c6ee0' },
+  groq: { label: 'Llama 3.3 70B', color: '#f0b429' },
+  gemini: { label: 'Gemini 2.5 Flash', color: '#60a8e0' },
+  mistral: { label: 'Codestral', color: '#3dd68c' },
+  openrouter: { label: 'DeepSeek R1', color: '#e8638e' },
+  cloudflare: { label: 'Llama 3.1 8B', color: '#9890c0' },
+};
 
 function getCodeFence(name: string): string {
   const ext = name.split('.').pop()?.toLowerCase() ?? '';
@@ -147,6 +162,9 @@ export default function AISidebar({ activePanel }: AISidebarProps) {
   const [contextExpanded, setContextExpanded] = useState(false);
   const [uploadedFiles, setUploadedFiles] = useState<UploadedFile[]>([]);
   const [pendingToolCalls, setPendingToolCalls] = useState<ToolCall[]>([]);
+  const [providerStatuses, setProviderStatuses] = useState<ProviderStatus[]>([]);
+  const [winner, setWinner] = useState<string | null>(null);
+  const [tick, setTick] = useState(0);
   const [isDragging, setIsDragging] = useState(false);
   const [hoveredMessage, setHoveredMessage] = useState<number | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
@@ -156,6 +174,47 @@ export default function AISidebar({ activePanel }: AISidebarProps) {
     for (const callback of approvalCallbacks.current.values()) callback(false);
     approvalCallbacks.current.clear();
   }, []);
+
+  useEffect(() => {
+    const suki = (window as any).suki;
+    if (!suki) return;
+
+    const unsubStart = suki.onProviderStart?.((data: { provider: string }) => {
+      setProviderStatuses(prev => [
+        ...prev.filter(status => status.provider !== data.provider),
+        { provider: data.provider, status: 'working', startedAt: Date.now() },
+      ]);
+    });
+
+    const unsubDone = suki.onProviderDone?.((data: { provider: string; latencyMs: number; success: boolean }) => {
+      setProviderStatuses(prev => prev.map(status => (
+        status.provider === data.provider
+          ? { ...status, status: data.success ? 'done' : 'failed', latencyMs: data.latencyMs }
+          : status
+      )));
+      setTimeout(() => {
+        setProviderStatuses(prev => prev.filter(status => status.provider !== data.provider));
+      }, 3000);
+    });
+
+    const unsubWinner = suki.onProviderWinner?.((data: { provider: string }) => {
+      setWinner(data.provider);
+      setTimeout(() => setWinner(current => (current === data.provider ? null : current)), 3000);
+    });
+
+    return () => {
+      unsubStart?.();
+      unsubDone?.();
+      unsubWinner?.();
+    };
+  }, []);
+
+  useEffect(() => {
+    const hasWorking = providerStatuses.some(status => status.status === 'working');
+    if (!hasWorking) return;
+    const interval = window.setInterval(() => setTick(value => value + 1), 100);
+    return () => window.clearInterval(interval);
+  }, [providerStatuses]);
 
   const tokenCount = useMemo(() => {
     const contextTokens = CONTEXT_SOURCES.reduce((sum, source) => sum + (contextToggles[source.key] ? source.tokens : 0), 0);
@@ -489,6 +548,73 @@ export default function AISidebar({ activePanel }: AISidebarProps) {
           </div>
         </div>
       </section>
+
+      {providerStatuses.length > 0 && (
+        <div style={{
+          padding: '6px 12px',
+          borderBottom: '1px solid #2d2850',
+          display: 'flex',
+          flexDirection: 'column',
+          gap: 4,
+          background: '#0a0812',
+          animation: 'fadeInDown 0.2s ease-out',
+        }}>
+          <div style={{ fontSize: 10, color: '#5a5480', marginBottom: 2 }}>AI Agents</div>
+          {providerStatuses.map(providerStatus => {
+            const info = PROVIDER_INFO[providerStatus.provider] ?? { label: providerStatus.provider, color: '#5a5480' };
+            void tick;
+            return (
+              <div
+                key={providerStatus.provider}
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: 8,
+                  animation: 'fadeInLeft 0.15s ease-out',
+                }}
+              >
+                <div style={{
+                  width: 6,
+                  height: 6,
+                  borderRadius: '50%',
+                  background: providerStatus.status === 'working' ? info.color : providerStatus.status === 'done' ? '#3dd68c' : '#5a5480',
+                  animation: providerStatus.status === 'working' ? 'pulse 0.8s ease-in-out infinite' : 'none',
+                  flexShrink: 0,
+                  transition: 'background 0.3s ease',
+                }} />
+                <span style={{
+                  fontSize: 11,
+                  color: providerStatus.status === 'working' ? info.color : providerStatus.status === 'done' ? '#3dd68c' : '#5a5480',
+                  fontWeight: providerStatus.status === 'working' ? 500 : 400,
+                  transition: 'color 0.3s ease',
+                  flex: 1,
+                }}>
+                  {info.label}
+                </span>
+                {providerStatus.status === 'done' && winner === providerStatus.provider && (
+                  <span style={{
+                    fontSize: 9,
+                    background: '#3dd68c22',
+                    color: '#3dd68c',
+                    border: '1px solid #3dd68c44',
+                    borderRadius: 8,
+                    padding: '1px 5px',
+                  }}>
+                    selected
+                  </span>
+                )}
+                <span style={{ fontSize: 10, color: '#5a5480', fontFamily: 'monospace' }}>
+                  {providerStatus.status === 'working'
+                    ? `${Math.floor((Date.now() - providerStatus.startedAt) / 100) / 10}s`
+                    : providerStatus.status === 'done'
+                      ? `✓ ${providerStatus.latencyMs}ms`
+                      : '✗ failed'}
+                </span>
+              </div>
+            );
+          })}
+        </div>
+      )}
 
       <div style={{ flex: 1, overflowY: 'auto', padding: 14, display: 'flex', flexDirection: 'column', gap: 12 }}>
         {messages.map((message, index) => (

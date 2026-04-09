@@ -22,6 +22,8 @@ contextBridge.exposeInMainWorld('suki', {
 
   saveKeys: (keys: Record<string, string>) => ipcRenderer.invoke('keys:save', keys),
   hasKeys: () => ipcRenderer.invoke('keys:has'),
+  whichKeys: () => ipcRenderer.invoke('keys:which'),
+  getKeys: () => ipcRenderer.invoke('keys:get'),
 
   openFolder: () => ipcRenderer.invoke('fs:openFolder'),
   openFile: () => ipcRenderer.invoke('fs:openFile'),
@@ -80,6 +82,18 @@ contextBridge.exposeInMainWorld('suki', {
   onForcePanelSwitch: (cb: (panel: string) => void) => {
     ipcRenderer.on('force-panel-switch', (_, panel) => cb(panel));
     return () => ipcRenderer.removeAllListeners('force-panel-switch');
+  },
+  onProviderStart: (cb: (data: { provider: string; taskType: string }) => void) => {
+    ipcRenderer.on('ai:provider:start', (_, data) => cb(data));
+    return () => ipcRenderer.removeAllListeners('ai:provider:start');
+  },
+  onProviderDone: (cb: (data: { provider: string; latencyMs: number; success: boolean }) => void) => {
+    ipcRenderer.on('ai:provider:done', (_, data) => cb(data));
+    return () => ipcRenderer.removeAllListeners('ai:provider:done');
+  },
+  onProviderWinner: (cb: (data: { provider: string }) => void) => {
+    ipcRenderer.on('ai:provider:winner', (_, data) => cb(data));
+    return () => ipcRenderer.removeAllListeners('ai:provider:winner');
   },
   onSetupState: (cb: (screen: 'setup' | 'main') => void) => {
     ipcRenderer.on('show-setup', () => cb('setup'));

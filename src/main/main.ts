@@ -3,7 +3,7 @@ import os from 'os';
 import path from 'path';
 import { hasKeys, saveKeys, loadKeys } from './KeysService';
 import { sqliteManager } from './SQLiteManager';
-import { query, queryAll, judge } from './AIRouter';
+import { query, queryAll, judge, routerEvents } from './AIRouter';
 import { ptyManager, type ShellType } from './PTYManager';
 
 let win: BrowserWindow;
@@ -341,8 +341,39 @@ function registerIPC() {
     return judge(task, implementations);
   });
 
-  ipcMain.handle('keys:save', (_, keys: Record<string, string>) => saveKeys(keys));
-  ipcMain.handle('keys:has', () => hasKeys());
+  ipcMain.handle('keys:save', (_, keys: Record<string, string>) => {
+    try {
+      const filteredKeys = Object.fromEntries(
+        Object.entries(keys).filter(([, value]) => value && String(value).trim().length > 0)
+      );
+      saveKeys(filteredKeys);
+      console.log('[IPC] keys:save successful');
+      return { success: true };
+    } catch (err) {
+      console.error('[IPC] keys:save failed:', err);
+      return { success: false, error: String(err) };
+    }
+  });
+  ipcMain.handle('keys:has', () => {
+    const result = hasKeys();
+    console.log('[IPC] keys:has:', result);
+    return result;
+  });
+  ipcMain.handle('keys:which', () => {
+    try {
+      const keys = loadKeys();
+      return Object.keys(keys).filter(key => keys[key] && String(keys[key]).trim().length > 0);
+    } catch {
+      return [];
+    }
+  });
+  ipcMain.handle('keys:get', () => {
+    try {
+      return loadKeys();
+    } catch {
+      return {};
+    }
+  });
 
   ipcMain.handle('fs:openFolder', async () => {
     const result = await dialog.showOpenDialog(win, { properties: ['openDirectory'] });
@@ -424,6 +455,15 @@ function registerIPC() {
 
 app.whenReady().then(() => {
   createWindow();
+  routerEvents.on('provider:start', data => {
+    win?.webContents.send('ai:provider:start', data);
+  });
+  routerEvents.on('provider:done', data => {
+    win?.webContents.send('ai:provider:done', data);
+  });
+  routerEvents.on('provider:winner', data => {
+    win?.webContents.send('ai:provider:winner', data);
+  });
   registerIPC();
 });
 

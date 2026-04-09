@@ -12,32 +12,90 @@ const PROVIDERS = [
   { key: 'cloudflareAccountId', label: 'Cloudflare Account ID', url: 'https://dash.cloudflare.com', hint: 'Free' },
   { key: 'cloudflareToken', label: 'Cloudflare API Token', url: 'https://dash.cloudflare.com', hint: 'Free' },
   { key: 'cohere', label: 'Cohere API Key', url: 'https://dashboard.cohere.com', hint: 'Free tier' },
-];
+] as const;
 
 export default function APIModal({ onClose }: Props) {
   const [keys, setKeys] = useState<Record<string, string>>({});
-  const [status, setStatus] = useState('');
+  const [originalKeys, setOriginalKeys] = useState<Record<string, string>>({});
+  const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
+  const [saveStatus, setSaveStatus] = useState<'idle' | 'success' | 'error'>('idle');
+
+  const inputStyle: React.CSSProperties = {
+    width: '100%',
+    padding: '8px 12px',
+    background: '#1a1730',
+    border: '1px solid #2d2850',
+    borderRadius: 6,
+    color: '#e8e4ff',
+    fontSize: 13,
+    outline: 'none',
+    transition: 'all 0.15s ease',
+    boxSizing: 'border-box',
+  };
 
   useEffect(() => {
-    (window as any).suki?.hasKeys().then((has: boolean) => {
-      if (has) setStatus('Keys saved');
-    });
-
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key === 'Escape') onClose();
     };
 
+    const load = async () => {
+      try {
+        const existing = await (window as any).suki?.getKeys?.() ?? {};
+        setKeys(existing);
+        setOriginalKeys(existing);
+      } catch {
+        setKeys({});
+        setOriginalKeys({});
+      } finally {
+        setLoading(false);
+      }
+    };
+
+    void load();
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
   }, [onClose]);
 
   const save = async () => {
     setSaving(true);
-    await (window as any).suki.saveKeys(keys);
-    setStatus('Saved!');
-    setSaving(false);
-    setTimeout(onClose, 2000);
+    setSaveStatus('idle');
+    try {
+      const suki = (window as any).suki;
+      if (!suki) throw new Error('Suki API not available');
+
+      const existing = await suki.getKeys?.() ?? {};
+      const merged: Record<string, string> = { ...existing };
+
+      for (const [key, value] of Object.entries(keys)) {
+        const trimmed = String(value ?? '').trim();
+        if (trimmed.length > 0) {
+          merged[key] = trimmed;
+        } else if (key in merged && originalKeys[key]) {
+          delete merged[key];
+        }
+      }
+
+      const result = await suki.saveKeys(merged);
+      console.log('[APIModal] saveKeys result:', result);
+
+      if (!result?.success) {
+        throw new Error(result?.error ?? 'Unknown save error');
+      }
+
+      setOriginalKeys(merged);
+      setKeys(merged);
+      setSaveStatus('success');
+      setTimeout(() => {
+        setSaveStatus('idle');
+        onClose();
+      }, 1500);
+    } catch (err) {
+      console.error('Failed to save keys:', err);
+      setSaveStatus('error');
+    } finally {
+      setSaving(false);
+    }
   };
 
   return (
@@ -94,57 +152,87 @@ export default function APIModal({ onClose }: Props) {
         </button>
 
         <h1 style={{ color: '#e8e4ff', fontSize: 24, fontWeight: 600, marginBottom: 8 }}>API Keys</h1>
-        <p style={{ color: '#9890c0', marginBottom: 10, fontSize: 14 }}>
+        <p style={{ color: '#9890c0', marginBottom: 24, fontSize: 14 }}>
           Add cloud AI fallback keys. All keys are encrypted locally.
         </p>
-        {status && <p style={{ color: status === 'Saved!' ? '#3dd68c' : '#a394f0', marginBottom: 24, fontSize: 13 }}>{status}</p>}
 
-        {PROVIDERS.map(p => (
-          <div key={p.key} className="api-modal-field" style={{ marginBottom: 16, borderRadius: 6, transition: 'background 0.15s ease' }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12, marginBottom: 4 }}>
-              <label style={{ color: '#e8e4ff', fontSize: 13 }}>{p.label}</label>
-              <a className="api-modal-link" href={p.url} target="_blank" rel="noreferrer" style={{ color: '#a394f0', fontSize: 12 }}>{p.hint} -&gt;</a>
+        {loading ? (
+          <div style={{ color: '#5a5480', fontSize: 13, marginBottom: 12 }}>Loading saved keys...</div>
+        ) : null}
+
+        {PROVIDERS.map(provider => {
+          const hasSavedValue = Boolean(originalKeys[provider.key]);
+          return (
+            <div key={provider.key} className="api-modal-field" style={{ marginBottom: 16, borderRadius: 6, transition: 'background 0.15s ease' }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12, marginBottom: 4 }}>
+                <label style={{ color: '#e8e4ff', fontSize: 13 }}>{provider.label}</label>
+                <a className="api-modal-link" href={provider.url} target="_blank" rel="noreferrer" style={{ color: '#a394f0', fontSize: 12 }}>
+                  {provider.hint} -&gt;
+                </a>
+              </div>
+
+              <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+                <div style={{ position: 'relative', flex: 1 }}>
+                  <input
+                    type="password"
+                    placeholder={hasSavedValue ? '••••••••••• (click to change)' : 'Paste key here...'}
+                    value={keys[provider.key] ?? ''}
+                    onChange={event => setKeys(prev => ({ ...prev, [provider.key]: event.target.value }))}
+                    style={{
+                      ...inputStyle,
+                      borderColor: hasSavedValue ? '#3dd68c44' : '#2d2850',
+                    }}
+                  />
+                  {hasSavedValue ? (
+                    <span
+                      style={{
+                        position: 'absolute',
+                        right: 8,
+                        top: '50%',
+                        transform: 'translateY(-50%)',
+                        fontSize: 10,
+                        color: '#3dd68c',
+                      }}
+                    >
+                      ✓
+                    </span>
+                  ) : null}
+                </div>
+
+                {hasSavedValue ? (
+                  <button
+                    onClick={() => setKeys(prev => ({ ...prev, [provider.key]: '' }))}
+                    title="Clear this key"
+                    style={{ background: 'transparent', border: '1px solid #2d2850', borderRadius: 4, color: '#5a5480', cursor: 'pointer', padding: '4px 8px', fontSize: 11, flexShrink: 0 }}
+                    onMouseEnter={event => { event.currentTarget.style.color = '#e05c5c'; }}
+                    onMouseLeave={event => { event.currentTarget.style.color = '#5a5480'; }}
+                  >
+                    x
+                  </button>
+                ) : null}
+              </div>
             </div>
-            <input
-              className="api-modal-input"
-              type="password"
-              placeholder="Paste key here..."
-              value={keys[p.key] ?? ''}
-              onChange={event => setKeys(prev => ({ ...prev, [p.key]: event.target.value }))}
-              style={{
-                width: '100%',
-                padding: '8px 12px',
-                background: '#1a1730',
-                border: '1px solid #2d2850',
-                borderRadius: 6,
-                color: '#e8e4ff',
-                fontSize: 13,
-                outline: 'none',
-                transition: 'all 0.15s ease',
-              }}
-            />
-          </div>
-        ))}
+          );
+        })}
 
         <button
-          className="api-modal-save"
           onClick={save}
-          disabled={saving}
+          disabled={saving || loading}
           style={{
             width: '100%',
             marginTop: 8,
             padding: '10px 0',
-            background: saving ? '#5548b0' : '#7c6ee0',
-            color: '#ffffff',
+            background: saveStatus === 'success' ? '#3dd68c' : saveStatus === 'error' ? '#e05c5c' : '#7c6ee0',
+            color: 'white',
             border: 'none',
             borderRadius: 6,
             fontWeight: 600,
-            cursor: saving ? 'default' : 'pointer',
+            cursor: saving || loading ? 'wait' : 'pointer',
             fontSize: 14,
-            transition: 'all 0.15s ease',
+            transition: 'background 0.2s ease',
           }}
         >
-          {saving ? 'Saving...' : 'Save Keys'}
+          {saving ? 'Saving...' : saveStatus === 'success' ? 'Saved!' : saveStatus === 'error' ? 'Error' : 'Save & Close'}
         </button>
       </div>
     </div>

@@ -9,6 +9,8 @@ interface CTFChallenge {
   title: string;
   description: string;
   url?: string;
+  attachments: string[];
+  wrongFlags: string[];
   category: CTFCategory;
   flagFormat: string;
   customFlagFormat: string;
@@ -103,20 +105,32 @@ const loadKnowledge = (): CTFKnowledge[] => {
 };
 
 const detectFlag = (text: string, flagFormat: string, customFormat: string): string | null => {
-  const explicitMatch = text.match(/FLAG_FOUND:\s*(\S+)/i) || text.match(/ANSWER_FOUND:\s*(.+)/i);
-  if (explicitMatch) return explicitMatch[1].trim();
+  const explicitMatch = text.match(/FLAG_FOUND:\s*([^\s\n",]+)/i);
+  if (explicitMatch) {
+    const candidate = explicitMatch[1].trim();
+    if (candidate.length < 4) return null;
+    if (/^[",.\-_:;]+$/.test(candidate)) return null;
+    return candidate;
+  }
+
+  const answerMatch = text.match(/ANSWER_FOUND:\s*(.{4,})/i);
+  if (answerMatch) {
+    const candidate = answerMatch[1].split('\n')[0].trim();
+    if (candidate.length < 2) return null;
+    return candidate;
+  }
 
   if (flagFormat === 'n/a') return null;
 
   if (flagFormat === 'auto') {
     const patterns = [
-      /CTF\{[^}]+\}/i,
-      /flag\{[^}]+\}/i,
-      /picoCTF\{[^}]+\}/i,
-      /HTB\{[^}]+\}/i,
-      /THM\{[^}]+\}/i,
-      /DUCTF\{[^}]+\}/i,
-      /corCTF\{[^}]+\}/i,
+      /CTF\{[^}]{3,}\}/i,
+      /flag\{[^}]{3,}\}/i,
+      /picoCTF\{[^}]{3,}\}/i,
+      /HTB\{[^}]{3,}\}/i,
+      /THM\{[^}]{3,}\}/i,
+      /DUCTF\{[^}]{3,}\}/i,
+      /corCTF\{[^}]{3,}\}/i,
     ];
     for (const pattern of patterns) {
       const match = text.match(pattern);
@@ -128,9 +142,27 @@ const detectFlag = (text: string, flagFormat: string, customFormat: string): str
   const format = flagFormat === 'custom' ? customFormat : flagFormat;
   if (!format) return null;
   const escaped = format.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-  const pattern = new RegExp(escaped + '[^}]+\\}', 'i');
+  const pattern = new RegExp(escaped + '[^}]{3,}\\}', 'i');
   const match = text.match(pattern);
   return match ? match[0] : null;
+};
+
+const isValidFlag = (flag: string, flagFormat: string, customFormat: string): boolean => {
+  if (flag.length < 5) return false;
+  if (/^[\s",.\-_:;!?]+$/.test(flag)) return false;
+
+  if (flagFormat !== 'n/a') {
+    if (!flag.includes('{') || !flag.includes('}')) return false;
+    const inner = flag.match(/\{([^}]+)\}/);
+    if (!inner || inner[1].length < 3) return false;
+
+    if (flagFormat !== 'auto') {
+      const format = flagFormat === 'custom' ? customFormat : flagFormat;
+      if (format && !flag.startsWith(format)) return false;
+    }
+  }
+
+  return true;
 };
 
 const stepColors: Record<SolveStep['type'], { color: string; label: string; bg: string }> = {
@@ -178,6 +210,7 @@ export default function CTFPane() {
     flagFormat: 'auto',
     customFlagFormat: '',
     points: '',
+    attachments: [] as string[],
   });
   const stopSolveRef = useRef(false);
   const solveLogRef = useRef<HTMLDivElement>(null);
@@ -206,6 +239,27 @@ export default function CTFPane() {
     };
     setSolveSteps(prev => [...prev, newStep]);
     return newStep;
+  };
+
+  const handleWrongFlag = () => {
+    if (!currentChallenge) return;
+
+    const wrongFlag = currentChallenge.flag ?? '';
+    const updated: CTFChallenge = {
+      ...currentChallenge,
+      status: 'unsolved',
+      flag: '',
+      wrongFlags: [...(currentChallenge.wrongFlags ?? []), wrongFlag].filter(Boolean),
+    };
+
+    setCurrentChallenge(updated);
+    setChallenges(prev => prev.map(challenge => challenge.id === updated.id ? updated : challenge));
+    setSolveSteps([]);
+    setExpandedOutputs({});
+
+    window.setTimeout(() => {
+      void solveCTF(updated);
+    }, 100);
   };
 
   const classifyChallenge = async (title: string, description: string, url: string): Promise<CTFCategory> => {
@@ -341,6 +395,60 @@ export default function CTFPane() {
     return `Relevant knowledge from past experience:\n${knowledgeText}`;
   };
 
+  const quickSolve = async (challenge: CTFChallenge): Promise<string | null> => {
+    if (!challenge.description) return null;
+
+    const text = challenge.description;
+    const suki = (window as any).suki;
+
+    try {
+      const b64matches = text.match(/[A-Za-z0-9+/]{20,}={0,2}/g) ?? [];
+      for (const match of b64matches) {
+        const decoded = atob(match);
+        const flag = detectFlag(decoded, challenge.flagFormat, challenge.customFlagFormat);
+        if (flag && isValidFlag(flag, challenge.flagFormat, challenge.customFlagFormat)) return flag;
+      }
+    } catch {
+      // Ignore quick browser-side decode errors.
+    }
+
+    const sanitizedText = text.replace(/'/g, '');
+    const quickCommands = [
+      `echo '${sanitizedText}' | base64 -d 2>/dev/null`,
+      `echo '${sanitizedText}' | xxd -r -p 2>/dev/null`,
+      `python3 -c "import base64; print(base64.b64decode('${text.trim()}').decode())" 2>/dev/null`,
+    ];
+
+    for (const command of quickCommands) {
+      try {
+        const result = await suki.execInWSL(command);
+        const output = stripAnsi(result.output);
+        const flag = detectFlag(output, challenge.flagFormat, challenge.customFlagFormat);
+        if (flag && isValidFlag(flag, challenge.flagFormat, challenge.customFlagFormat)) return flag;
+      } catch {
+        // Ignore failed quick checks.
+      }
+    }
+
+    return null;
+  };
+
+  const summarizeOutput = async (toolName: string, output: string, challenge: CTFChallenge): Promise<string> => {
+    if (output.length < 500) return output;
+    const detected = detectFlag(output, challenge.flagFormat, challenge.customFlagFormat);
+    if (detected && isValidFlag(detected, challenge.flagFormat, challenge.customFlagFormat)) return output;
+
+    try {
+      const summary = await (window as any).suki.query('general', [{
+        role: 'user',
+        content: `Summarize this ${toolName} output for a CTF solver in 3-5 sentences. Focus on security-relevant findings, errors, and anything unusual. Preserve any flag-like strings exactly.\n\nOutput:\n${output.slice(0, 3000)}`,
+      }]);
+      return `[summarized] ${summary}`;
+    } catch {
+      return `${output.slice(0, 800)}... (truncated)`;
+    }
+  };
+
   const solveCTF = async (challenge: CTFChallenge) => {
     setSolveSteps([]);
     setExpandedOutputs({});
@@ -354,6 +462,23 @@ export default function CTFPane() {
     };
 
     updateChallenge({ status: 'solving' });
+
+    addStep({ type: 'reasoning', content: 'Running quick-solve checks...' });
+    const quickFlag = await quickSolve(challenge);
+    if (quickFlag) {
+      addStep({ type: 'flag_found', content: `FLAG FOUND (quick solve): ${quickFlag}` });
+      updateChallenge({ status: 'solved', flag: quickFlag, solvedAt: Date.now() });
+      setSolving(false);
+      void learnFromSolveAttempt(challenge, stepsRef.current, true);
+      return;
+    }
+
+    if ((challenge.wrongFlags ?? []).length > 0) {
+      addStep({
+        type: 'reasoning',
+        content: `Re-running with ${challenge.wrongFlags.length} known wrong flag(s): ${challenge.wrongFlags.join(', ')}\nWill try a completely different approach.`,
+      });
+    }
 
     let pageContent = '';
     if (challenge.url) {
@@ -377,48 +502,101 @@ export default function CTFPane() {
     }
     addStep({ type: 'tool_output', content: `Tools:\n${availableTools || 'No tools reported'}`, tool: 'wsl' });
 
+    let attachmentContext = '';
+    if (challenge.attachments && challenge.attachments.length > 0) {
+      addStep({ type: 'reasoning', content: `Reading ${challenge.attachments.length} attached file(s)...` });
+
+      for (const filePath of challenge.attachments) {
+        const fileName = filePath.split(/[\\/]/).pop() ?? filePath;
+        const ext = fileName.split('.').pop()?.toLowerCase() ?? '';
+
+        try {
+          const wslPath = filePath
+            .replace(/^([A-Z]):\\/, (_, drive) => `/mnt/${String(drive).toLowerCase()}/`)
+            .replace(/\\/g, '/');
+
+          const fileType = await (window as any).suki.execInWSL(`file "${wslPath}" 2>/dev/null`);
+          addStep({ type: 'tool_output', content: `${fileName}: ${stripAnsi(fileType.output)}`, tool: 'file' });
+
+          const textExts = ['txt', 'md', 'py', 'js', 'ts', 'json', 'xml', 'html', 'css', 'sh', 'c', 'cpp', 'java', 'rb', 'php', 'yaml', 'yml', 'toml', 'ini', 'cfg', 'conf', 'log'];
+          if (textExts.includes(ext)) {
+            const content = await (window as any).suki.readFile(filePath);
+            const truncated = content.length > 3000 ? `${content.slice(0, 3000)}\n...(truncated)` : content;
+            attachmentContext += `\nFile: ${fileName}\n\`\`\`${ext}\n${truncated}\n\`\`\`\n`;
+          } else {
+            const strings = await (window as any).suki.execInWSL(`strings "${wslPath}" 2>/dev/null | head -50`);
+            const xxd = await (window as any).suki.execInWSL(`xxd "${wslPath}" 2>/dev/null | head -20`);
+            attachmentContext += `\nFile: ${fileName} (binary)\nstrings output:\n${stripAnsi(strings.output)}\nhex dump:\n${stripAnsi(xxd.output)}\n`;
+          }
+        } catch (error) {
+          addStep({ type: 'error', content: `Could not read ${fileName}: ${String(error)}` });
+        }
+      }
+
+      if (attachmentContext) {
+        addStep({ type: 'tool_output', content: `Loaded ${challenge.attachments.length} file(s) into context`, tool: 'files' });
+      }
+    }
+
     const effectiveFormat = challenge.flagFormat === 'custom' ? challenge.customFlagFormat : challenge.flagFormat;
     const flagInstructions = challenge.flagFormat === 'n/a'
-      ? 'There is no standard flag format. The answer may be a word, number, or phrase. Output ANSWER_FOUND: <answer>'
+      ? `There is no standard flag format. When you find the answer, output it on its own line exactly like this:
+ANSWER_FOUND: the_answer_here
+Do not add quotes, punctuation, or anything else after the answer.`
       : challenge.flagFormat === 'auto'
-        ? 'Common flag formats: CTF{...} flag{...} picoCTF{...} HTB{...} THM{...}. Output FLAG_FOUND: <flag>'
-        : `Flag format: ${effectiveFormat}...}. Output FLAG_FOUND: <flag>`;
+        ? `Common flag formats: CTF{...} flag{...} picoCTF{...} HTB{...} THM{...}
+When you find the flag, output it on its own line exactly like this:
+FLAG_FOUND: CTF{the_flag_here}
+The flag must be in the format PREFIX{content}. Do not output FLAG_FOUND with just a quote or punctuation.`
+        : `The flag format is: ${effectiveFormat}...}
+When you find the flag, output it on its own line exactly like this:
+FLAG_FOUND: ${effectiveFormat}the_flag_here}
+Only output FLAG_FOUND when you are certain you have found the complete flag in the correct format.`;
+    const wrongFlagsContext = (challenge.wrongFlags ?? []).length > 0
+      ? `\nPREVIOUSLY TRIED FLAGS THAT WERE WRONG (do NOT output these again):\n${challenge.wrongFlags.map(flag => `- ${flag}`).join('\n')}\nThese have been confirmed incorrect. You must find a different flag.\n`
+      : '';
 
     const relevantKnowledge = await getRelevantKnowledge(challenge);
 
-    const strategyPrompt = `You are an expert CTF solver.\n\nChallenge: ${challenge.title}\nCategory: ${challenge.category}\nDescription: ${challenge.description}\n${challenge.url ? `URL: ${challenge.url}\n` : ''}${pageContent ? `Page content:\n${pageContent.slice(0, 2000)}\n` : ''}Available WSL tools: ${availableTools.slice(0, 500)}\n${relevantKnowledge ? `${relevantKnowledge}\n` : ''}Category-specific tools: ${(CATEGORY_TOOLS[challenge.category] ?? CATEGORY_TOOLS.unknown).join(', ')}\n${flagInstructions}\n\nCreate a numbered step-by-step strategy. Use the past experience above to guide your approach.`;
+    const solveSystem = `You are an expert CTF solver with memory of past challenges.\n${relevantKnowledge ? `\nPast experience:\n${relevantKnowledge}\n` : ''}${wrongFlagsContext}Use tools to solve the challenge.\n\nTo run a WSL/Linux command:\n<tool>{"tool":"run_wsl_command","args":{"command":"bash command here"}}</tool>\n\nTo run a PowerShell command:\n<tool>{"tool":"run_command","args":{"command":"ps command here"}}</tool>\n\nTo search the web:\n<tool>{"tool":"search_web","args":{"query":"search query"}}</tool>\n\nTo navigate the browser:\n<tool>{"tool":"browser_navigate","args":{"url":"https://..."}}</tool>\n\n${flagInstructions}\n\nBe methodical. One tool at a time. Learn from each output.`;
 
-    let strategy = '';
-    try {
-      strategy = await (window as any).suki.query('reasoning', [{ role: 'user', content: strategyPrompt }]);
-      addStep({ type: 'strategy', content: String(strategy) });
-    } catch (error: any) {
-      addStep({ type: 'error', content: `Could not create strategy: ${error?.message ?? String(error)}` });
-    }
-
-    const solveSystem = `You are an expert CTF solver with memory of past challenges.\n${relevantKnowledge ? `\nPast experience:\n${relevantKnowledge}\n` : ''}Use tools to solve the challenge.\n\nTo run a WSL/Linux command:\n<tool>{"tool":"run_wsl_command","args":{"command":"bash command here"}}</tool>\n\nTo run a PowerShell command:\n<tool>{"tool":"run_command","args":{"command":"ps command here"}}</tool>\n\nTo search the web:\n<tool>{"tool":"search_web","args":{"query":"search query"}}</tool>\n\nTo navigate the browser:\n<tool>{"tool":"browser_navigate","args":{"url":"https://..."}}</tool>\n\n${flagInstructions}\n\nBe methodical. One tool at a time. Learn from each output.`;
-
-    const history: Array<{ role: 'user' | 'assistant'; content: string }> = [{
-      role: 'user',
-      content: `Solve: ${challenge.title}\n\nDescription: ${challenge.description}\n${challenge.url ? `URL: ${challenge.url}\n` : ''}\nStrategy:\n${strategy || 'No initial strategy available.'}\n\nStart solving now.`,
-    }];
+    const history: Array<{ role: 'user' | 'assistant'; content: string }> = [];
+    const combinedPrompt = `You are an expert CTF solver.\n\nChallenge: ${challenge.title}\nCategory: ${challenge.category}\nDescription: ${challenge.description}\n${challenge.url ? `URL: ${challenge.url}\n` : ''}${pageContent ? `Page content:\n${pageContent.slice(0, 1500)}\n` : ''}${attachmentContext ? `Attached files:\n${attachmentContext}\n` : ''}Available WSL tools: ${availableTools.slice(0, 300)}\n${relevantKnowledge ? `${relevantKnowledge}\n` : ''}${wrongFlagsContext}${flagInstructions}\n\n${(challenge.wrongFlags ?? []).length > 0 ? `IMPORTANT: Previous attempts found ${challenge.wrongFlags.join(', ')} but these were WRONG. Try a completely different approach.\n` : ''}First, briefly state your approach in 2-3 sentences.\nThen immediately use a tool to start solving.\nDo not just plan - act now.`;
+    history.push({ role: 'user', content: combinedPrompt });
 
     let flagFound = false;
-    const maxIterations = 20;
+    const recentToolCalls = new Set<string>();
+    let stuckCount = 0;
+    let lastResponseHash = '';
+    const maxIterations = 15;
 
     for (let iteration = 0; iteration < maxIterations && !stopSolveRef.current && !flagFound; iteration += 1) {
       let response = '';
       try {
-        response = await (window as any).suki.query('reasoning', [{ role: 'system', content: solveSystem }, ...history]);
+        const trimmedHistory = history.slice(-6);
+        response = await (window as any).suki.query('reasoning', [{ role: 'system', content: solveSystem }, ...trimmedHistory]);
       } catch (error: any) {
         addStep({ type: 'error', content: `AI error: ${error?.message ?? String(error)}` });
         break;
       }
 
+      const responseHash = response.slice(0, 100);
+      if (responseHash === lastResponseHash) {
+        stuckCount += 1;
+        if (stuckCount >= 3) {
+          addStep({ type: 'error', content: 'AI appears stuck in a loop. Stopping.' });
+          break;
+        }
+        history.push({ role: 'user', content: 'You are repeating yourself. Try a completely different tool or approach. Think outside the box.' });
+      } else {
+        stuckCount = 0;
+      }
+      lastResponseHash = responseHash;
+
       history.push({ role: 'assistant', content: response });
 
       const responseFlag = detectFlag(response, challenge.flagFormat, challenge.customFlagFormat);
-      if (responseFlag) {
+      if (responseFlag && isValidFlag(responseFlag, challenge.flagFormat, challenge.customFlagFormat)) {
         addStep({ type: 'flag_found', content: `FLAG FOUND: ${responseFlag}` });
         updateChallenge({ status: 'solved', flag: responseFlag, solvedAt: Date.now() });
         flagFound = true;
@@ -442,6 +620,14 @@ export default function CTFPane() {
         const toolName = toolCall.tool ?? 'unknown';
         const args = toolCall.args ?? {};
         const commandText = args.command || args.url || args.query || '';
+        const toolKey = `${toolName}:${commandText}`;
+        if (recentToolCalls.has(toolKey)) {
+          toolResults.push(`Note: ${toolName} with this command was already tried. Try a completely different approach or tool.`);
+          continue;
+        }
+        recentToolCalls.add(toolKey);
+        if (recentToolCalls.size > 10) recentToolCalls.clear();
+
         addStep({ type: 'tool_call', content: `${toolName}: ${commandText}`, tool: toolName, command: commandText });
 
         let output = '';
@@ -476,21 +662,22 @@ export default function CTFPane() {
         }
 
         const outputFlag = detectFlag(output, challenge.flagFormat, challenge.customFlagFormat);
-        if (outputFlag) {
+        if (outputFlag && isValidFlag(outputFlag, challenge.flagFormat, challenge.customFlagFormat)) {
           addStep({ type: 'flag_found', content: `FLAG FOUND IN OUTPUT: ${outputFlag}` });
           updateChallenge({ status: 'solved', flag: outputFlag, solvedAt: Date.now() });
           flagFound = true;
         }
 
+        const summarized = await summarizeOutput(toolName, output, challenge);
         addStep({ type: 'tool_output', content: output.slice(0, 1500), tool: toolName });
-        toolResults.push(`Tool ${toolName} output:\n${output.slice(0, 1500)}`);
+        toolResults.push(`Tool ${toolName} output:\n${summarized}`);
       }
 
       if (flagFound) break;
 
       const cleanResponse = response.replace(/<tool>[\s\S]*?<\/tool>/g, '').trim();
-      if (cleanResponse && !hasToolCalls) {
-        addStep({ type: 'reasoning', content: cleanResponse });
+      if (cleanResponse) {
+        addStep({ type: hasToolCalls && iteration === 0 ? 'strategy' : 'reasoning', content: cleanResponse });
       }
 
       history.push({
@@ -512,6 +699,7 @@ export default function CTFPane() {
 
     setSolving(false);
     void learnFromSolveAttempt(challenge, stepsRef.current, flagFound);
+    void learnFromWriteups(challenge);
   };
 
   const handleCreate = async () => {
@@ -526,6 +714,8 @@ export default function CTFPane() {
       title: form.title.trim(),
       description: form.description.trim(),
       url: form.url.trim() || undefined,
+      attachments: form.attachments,
+      wrongFlags: [],
       category,
       flagFormat: form.flagFormat,
       customFlagFormat: form.customFlagFormat,
@@ -539,8 +729,7 @@ export default function CTFPane() {
     setSolveSteps([]);
     setExpandedOutputs({});
     setShowNewModal(false);
-    setForm({ title: '', description: '', url: '', category: 'auto', flagFormat: 'auto', customFlagFormat: '', points: '' });
-    void learnFromWriteups(challenge);
+    setForm({ title: '', description: '', url: '', category: 'auto', flagFormat: 'auto', customFlagFormat: '', points: '', attachments: [] });
   };
 
   const sortedKnowledge = useMemo(() => [...knowledgeBase].sort((a, b) => b.createdAt - a.createdAt), [knowledgeBase]);
@@ -661,7 +850,28 @@ export default function CTFPane() {
                 {solving ? (
                   <button onClick={() => { stopSolveRef.current = true; setSolving(false); }} style={{ padding: '5px 14px', background: '#e05c5c', color: 'white', border: 'none', borderRadius: 6, fontSize: 12, cursor: 'pointer' }}>Stop</button>
                 ) : (
-                  <button onClick={() => { void solveCTF(currentChallenge); }} disabled={currentChallenge.status === 'solved'} style={{ padding: '5px 14px', background: currentChallenge.status === 'solved' ? '#1a1730' : '#7c6ee0', color: currentChallenge.status === 'solved' ? '#5a5480' : 'white', border: 'none', borderRadius: 6, fontSize: 12, cursor: currentChallenge.status === 'solved' ? 'default' : 'pointer' }}>Auto-Solve</button>
+                  <div style={{ display: 'flex', gap: 8 }}>
+                    {currentChallenge.status === 'failed' ? (
+                      <button
+                        onClick={() => { void solveCTF(currentChallenge); }}
+                        style={{
+                          padding: '5px 14px',
+                          background: 'transparent',
+                          color: '#f0b429',
+                          border: '1px solid #f0b42944',
+                          borderRadius: 6,
+                          fontSize: 12,
+                          cursor: 'pointer',
+                          transition: 'all 0.15s ease',
+                        }}
+                        onMouseEnter={event => { event.currentTarget.style.background = 'rgba(240,180,41,0.1)'; }}
+                        onMouseLeave={event => { event.currentTarget.style.background = 'transparent'; }}
+                      >
+                        ↺ Re-run
+                      </button>
+                    ) : null}
+                    <button onClick={() => { void solveCTF(currentChallenge); }} disabled={solving} style={{ padding: '5px 14px', background: '#7c6ee0', color: 'white', border: 'none', borderRadius: 6, fontSize: 12, cursor: solving ? 'default' : 'pointer', opacity: solving ? 0.6 : 1 }}>Auto-Solve</button>
+                  </div>
                 )}
               </div>
               <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
@@ -669,6 +879,28 @@ export default function CTFPane() {
                 <span style={{ fontSize: 10, padding: '2px 8px', borderRadius: 10, background: '#1a1730', color: '#9890c0', border: '1px solid #2d2850', fontFamily: 'monospace' }}>{currentChallenge.flagFormat === 'n/a' ? 'No flag format' : currentChallenge.flagFormat === 'auto' ? 'Auto-detect' : currentChallenge.flagFormat === 'custom' ? `${currentChallenge.customFlagFormat}...}` : `${currentChallenge.flagFormat}...}`}</span>
                 {currentChallenge.points ? <span style={{ fontSize: 10, padding: '2px 8px', borderRadius: 10, background: '#1a1730', color: '#f0b429', border: '1px solid #2d285044' }}>{currentChallenge.points} pts</span> : null}
               </div>
+              {(currentChallenge.wrongFlags ?? []).length > 0 ? (
+                <div style={{ marginTop: 8, display: 'flex', flexWrap: 'wrap', gap: 4, alignItems: 'center' }}>
+                  <span style={{ fontSize: 10, color: '#5a5480' }}>Wrong:</span>
+                  {currentChallenge.wrongFlags.map(flag => (
+                    <span
+                      key={flag}
+                      style={{
+                        fontSize: 10,
+                        background: 'rgba(224,92,92,0.1)',
+                        color: '#e05c5c',
+                        border: '1px solid rgba(224,92,92,0.2)',
+                        borderRadius: 8,
+                        padding: '1px 8px',
+                        fontFamily: 'monospace',
+                        textDecoration: 'line-through',
+                      }}
+                    >
+                      {flag}
+                    </span>
+                  ))}
+                </div>
+              ) : null}
               {currentChallenge.description ? <div style={{ fontSize: 12, color: '#9890c0', marginTop: 8, lineHeight: 1.5 }}>{currentChallenge.description.slice(0, 200)}{currentChallenge.description.length > 200 ? '...' : ''}</div> : null}
             </div>
 
@@ -704,6 +936,29 @@ export default function CTFPane() {
                   setChallenges(prev => prev.map(item => item.id === updated.id ? updated : item));
                 }} placeholder={currentChallenge.flagFormat === 'n/a' ? 'Answer here...' : 'CTF{flag_here}'} style={{ flex: 1, background: '#110f1e', border: `1px solid ${currentChallenge.flag ? '#3dd68c' : '#2d2850'}`, borderRadius: 6, color: currentChallenge.flag ? '#3dd68c' : '#e8e4ff', padding: '7px 10px', fontSize: 13, fontFamily: 'monospace', outline: 'none' }} />
                 <button onClick={() => currentChallenge.flag && navigator.clipboard.writeText(currentChallenge.flag)} disabled={!currentChallenge.flag} style={{ padding: '7px 14px', background: '#1a1730', color: '#7c6ee0', border: '1px solid #2d2850', borderRadius: 6, fontSize: 12, cursor: 'pointer', opacity: currentChallenge.flag ? 1 : 0.4 }}>Copy</button>
+                {currentChallenge.status === 'solved' && currentChallenge.flag ? (
+                  <button
+                    onClick={handleWrongFlag}
+                    style={{
+                      padding: '7px 14px',
+                      background: 'transparent',
+                      color: '#e05c5c',
+                      border: '1px solid #e05c5c44',
+                      borderRadius: 6,
+                      fontSize: 12,
+                      cursor: 'pointer',
+                      transition: 'all 0.15s ease',
+                    }}
+                    onMouseEnter={event => {
+                      event.currentTarget.style.background = 'rgba(224,92,92,0.1)';
+                    }}
+                    onMouseLeave={event => {
+                      event.currentTarget.style.background = 'transparent';
+                    }}
+                  >
+                    ✗ Wrong Flag
+                  </button>
+                ) : null}
               </div>
             </div>
           </>
@@ -711,7 +966,12 @@ export default function CTFPane() {
       </div>
 
       {showNewModal ? (
-        <div style={{ position: 'fixed', inset: 0, background: 'rgba(10,8,18,0.85)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000 }} onClick={event => event.target === event.currentTarget && setShowNewModal(false)}>
+        <div style={{ position: 'fixed', inset: 0, background: 'rgba(10,8,18,0.85)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000 }} onClick={event => {
+          if (event.target === event.currentTarget) {
+            setShowNewModal(false);
+            setForm({ title: '', description: '', url: '', category: 'auto', flagFormat: 'auto', customFlagFormat: '', points: '', attachments: [] });
+          }
+        }}>
           <div style={{ background: '#110f1e', border: '1px solid #2d2850', borderRadius: 12, padding: 24, width: 480, maxHeight: '80vh', overflowY: 'auto' }}>
             <div style={{ fontSize: 16, fontWeight: 500, color: '#e8e4ff', marginBottom: 20 }}>New CTF Challenge</div>
             <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
@@ -726,6 +986,83 @@ export default function CTFPane() {
               <div>
                 <div style={{ fontSize: 11, color: '#5a5480', marginBottom: 4 }}>Challenge URL (optional)</div>
                 <input style={inputStyle} placeholder="https://..." value={form.url} onChange={event => setForm(prev => ({ ...prev, url: event.target.value }))} />
+              </div>
+              <div>
+                <div style={{ fontSize: 11, color: '#5a5480', marginBottom: 4 }}>
+                  Attachments (optional)
+                </div>
+                <div
+                  onDragOver={event => {
+                    event.preventDefault();
+                    event.currentTarget.style.borderColor = '#7c6ee0';
+                    event.currentTarget.style.background = 'rgba(124,110,224,0.05)';
+                  }}
+                  onDragLeave={event => {
+                    event.currentTarget.style.borderColor = '#2d2850';
+                    event.currentTarget.style.background = 'transparent';
+                  }}
+                  onDrop={async event => {
+                    event.preventDefault();
+                    event.currentTarget.style.borderColor = '#2d2850';
+                    event.currentTarget.style.background = 'transparent';
+                    const files = Array.from(event.dataTransfer.files);
+                    const paths = files.map(file => (file as any).path).filter(Boolean) as string[];
+                    setForm(prev => ({ ...prev, attachments: [...new Set([...prev.attachments, ...paths])] }));
+                  }}
+                  onClick={async () => {
+                    const path = await (window as any).suki.openFile?.();
+                    if (path) setForm(prev => ({ ...prev, attachments: [...new Set([...prev.attachments, path])] }));
+                  }}
+                  style={{
+                    border: '1px dashed #2d2850',
+                    borderRadius: 6,
+                    padding: '12px',
+                    textAlign: 'center',
+                    cursor: 'pointer',
+                    color: '#5a5480',
+                    fontSize: 12,
+                    transition: 'all 0.15s ease',
+                    background: 'transparent',
+                  }}
+                >
+                  Drop files here or click to browse
+                </div>
+                {form.attachments.length > 0 ? (
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 4, marginTop: 6 }}>
+                    {form.attachments.map(filePath => {
+                      const fileName = filePath.split(/[\\/]/).pop() ?? filePath;
+                      return (
+                        <div
+                          key={filePath}
+                          style={{
+                            display: 'flex',
+                            alignItems: 'center',
+                            gap: 8,
+                            background: '#1a1730',
+                            border: '1px solid #2d2850',
+                            borderRadius: 4,
+                            padding: '4px 8px',
+                          }}
+                        >
+                          <span style={{ fontSize: 11, color: '#9890c0', flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                            📎 {fileName}
+                          </span>
+                          <button
+                            onClick={event => {
+                              event.stopPropagation();
+                              setForm(prev => ({ ...prev, attachments: prev.attachments.filter(path => path !== filePath) }));
+                            }}
+                            style={{ background: 'transparent', border: 'none', color: '#5a5480', cursor: 'pointer', fontSize: 14, lineHeight: 1, padding: '0 2px' }}
+                            onMouseEnter={event => { event.currentTarget.style.color = '#e05c5c'; }}
+                            onMouseLeave={event => { event.currentTarget.style.color = '#5a5480'; }}
+                          >
+                            ×
+                          </button>
+                        </div>
+                      );
+                    })}
+                  </div>
+                ) : null}
               </div>
               <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>
                 <div>
@@ -749,7 +1086,10 @@ export default function CTFPane() {
             </div>
             <div style={{ display: 'flex', gap: 8, marginTop: 20 }}>
               <button onClick={() => { void handleCreate(); }} disabled={!form.title.trim()} style={{ flex: 1, padding: '9px 0', background: form.title.trim() ? '#7c6ee0' : '#1a1730', color: form.title.trim() ? 'white' : '#5a5480', border: 'none', borderRadius: 6, cursor: form.title.trim() ? 'pointer' : 'default', fontSize: 13, fontWeight: 500 }}>Create & Start</button>
-              <button onClick={() => setShowNewModal(false)} style={{ padding: '9px 16px', background: 'transparent', color: '#9890c0', border: '1px solid #2d2850', borderRadius: 6, cursor: 'pointer', fontSize: 13 }}>Cancel</button>
+              <button onClick={() => {
+                setShowNewModal(false);
+                setForm({ title: '', description: '', url: '', category: 'auto', flagFormat: 'auto', customFlagFormat: '', points: '', attachments: [] });
+              }} style={{ padding: '9px 16px', background: 'transparent', color: '#9890c0', border: '1px solid #2d2850', borderRadius: 6, cursor: 'pointer', fontSize: 13 }}>Cancel</button>
             </div>
           </div>
         </div>
